@@ -1,0 +1,13 @@
+[package]
+name = "meltdown"
+version = "0.1.0"
+edition = "2021"
+license = "0BSD"
+readme = "README.md"
+description = "A lightweight service manager to help with graceful shutdown of asynchronous applications."
+keywords = ["asynchronous", "graceful", "shutdown"]
+categories = ["asynchronous"]
+repository = "https://github.com/joshua-cooper/meltdown"
+
+[dependencies]
+futures = "0.3.24"

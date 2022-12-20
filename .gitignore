@@ -1,0 +1,9 @@
+# Nix
+result
+
+# Direnv
+/.direnv/
+
+# Cargo
+/target/
+/Cargo.lock
