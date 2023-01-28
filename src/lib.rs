@@ -62,7 +62,7 @@ where
 /// A service manager.
 pub struct Meltdown<T> {
     senders: Vec<Sender<()>>,
-    futures: FuturesUnordered<Pin<Box<dyn Future<Output = T>>>>,
+    futures: FuturesUnordered<Pin<Box<dyn Future<Output = T> + Send>>>,
 }
 
 impl<T> Meltdown<T> {
@@ -79,7 +79,7 @@ impl<T> Meltdown<T> {
     pub fn register<S, F>(&mut self, service: S) -> &mut Self
     where
         S: Service<F>,
-        F: Future<Output = T> + 'static,
+        F: Future<Output = T> + Send + 'static,
     {
         let (sender, receiver) = oneshot::channel();
         self.senders.push(sender);
