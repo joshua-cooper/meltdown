@@ -9,6 +9,9 @@
     clippy::cargo
 )]
 
+#[cfg(feature = "utils")]
+pub mod utils;
+
 use futures::{
     channel::oneshot::{self, Receiver, Sender},
     stream::FuturesUnordered,
