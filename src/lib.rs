@@ -12,7 +12,7 @@
 use futures::{
     channel::oneshot::{self, Receiver, Sender},
     stream::FuturesUnordered,
-    Stream,
+    Stream, StreamExt,
 };
 use std::{
     future::Future,
@@ -96,6 +96,13 @@ impl<T> Meltdown<T> {
         for sender in self.senders.drain(..) {
             let _result = sender.send(());
         }
+    }
+
+    /// Waits for the next service to complete, returning its output.
+    ///
+    /// If there are no services left, this will return `None`.
+    pub async fn wait_next(&mut self) -> Option<T> {
+        self.next().await
     }
 }
 
