@@ -9,6 +9,9 @@
     clippy::cargo
 )]
 
+#[cfg(feature = "utils")]
+pub mod utils;
+
 use futures::{
     channel::oneshot::{self, Receiver, Sender},
     stream::FuturesUnordered,
@@ -42,18 +45,24 @@ impl Future for Token {
 }
 
 /// A service.
-pub trait Service<F> {
+pub trait Service {
+    /// The future response value of this service.
+    type Future: Future;
+
     /// Runs the service to completion.
     ///
     /// If the [`Token`] future provided to the service resolves, the service is expected to start
     /// a graceful shutdown.
-    fn call(self, token: Token) -> F;
+    fn call(self, token: Token) -> Self::Future;
 }
 
-impl<T, F> Service<F> for T
+impl<T, F> Service for T
 where
     T: FnOnce(Token) -> F,
+    F: Future,
 {
+    type Future = F;
+
     fn call(self, token: Token) -> F {
         self(token)
     }
@@ -76,10 +85,10 @@ impl<T> Meltdown<T> {
     }
 
     /// Registers a service.
-    pub fn register<S, F>(&mut self, service: S) -> &mut Self
+    pub fn register<S>(&mut self, service: S) -> &mut Self
     where
-        S: Service<F>,
-        F: Future<Output = T> + Send + 'static,
+        S: Service,
+        S::Future: Future<Output = T> + Send + 'static,
     {
         let (sender, receiver) = oneshot::channel();
         self.senders.push(sender);

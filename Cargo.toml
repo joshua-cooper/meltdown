@@ -11,3 +11,15 @@ repository = "https://github.com/joshua-cooper/meltdown"
 
 [dependencies]
 futures = "0.3.24"
+pin-project = { version = "1.0.12", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.24.2", features = ["full"] }
+
+[features]
+utils = ["pin-project"]
+
+[[example]]
+name = "utils"
+path = "examples/utils.rs"
+required-features = ["utils"]
