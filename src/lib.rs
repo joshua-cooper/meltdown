@@ -1,114 +1,159 @@
 //! A lightweight service manager to help with graceful shutdown of asynchronous applications.
+//!
+//! # Overview
+//!
+//! Meltdown makes it easy to manage multiple long-running services and coordinate their graceful
+//! shutdown. A service can be any async task that needs to run continuously and can respond to a
+//! shutdown signal.
+//!
+//! Meltdown is runtime-agnostic and works with any async runtime. It has minimal dependencies,
+//! only requiring [`futures_util`] and [`futures_channel`] for core async primitives.
+//!
+//! # Creating Services
+//!
+//! The simplest way to create a service is with an async function that takes a [`Token`]:
+//!
+//! ```
+//! use meltdown::Token;
+//!
+//! async fn my_service(token: Token) {
+//!     println!("Service starting...");
+//!
+//!     // Run until shutdown is triggered
+//!     token.await;
+//!
+//!     println!("Service shutting down...");
+//! }
+//! ```
+//!
+//! For more complex services, you can implement the [`Service`] trait directly.
+//!
+//! # Managing Services
+//!
+//! Use [`Meltdown`] to register and manage your services:
+//!
+//! ```
+//! # pollster::block_on(async {
+//! use meltdown::Meltdown;
+//!
+//! let mut meltdown = Meltdown::new()
+//!     .register(|_| async {
+//!         // Completes immediately.
+//!         1
+//!     })
+//!     .register(|token| async {
+//!         // Waits for a shutdown trigger.
+//!         token.await;
+//!         2
+//!     });
+//!
+//! if let Some(id) = meltdown.next().await {
+//!     println!("{id} stopped, shutting down");
+//!     meltdown.trigger();
+//! }
+//!
+//! while let Some(id) = meltdown.next().await {
+//!     println!("{id} stopped");
+//! }
+//! # })
+//! ```
 
-#![forbid(unsafe_code)]
-#![warn(
-    missing_docs,
-    clippy::all,
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::cargo
-)]
+extern crate alloc;
 
-use futures::{
-    channel::oneshot::{self, Receiver, Sender},
-    stream::FuturesUnordered,
-    Stream, StreamExt,
-};
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+#[cfg(feature = "catch-panic")]
+pub mod catch_panic;
+#[cfg(feature = "tagged")]
+pub mod tagged;
 
-/// A token future that resolves once a [`Meltdown`] has been triggered.
-pub struct Token {
-    receiver: Receiver<()>,
-}
+mod service;
+mod token;
 
-impl Token {
-    /// Creates a new [`Token`].
-    #[must_use]
-    const fn new(receiver: Receiver<()>) -> Self {
-        Self { receiver }
-    }
-}
+pub use self::{service::Service, token::Token};
 
-impl Future for Token {
-    type Output = ();
+use alloc::boxed::Box;
+use core::{future::Future, pin::Pin};
+use futures_util::{stream::FuturesUnordered, Stream, StreamExt};
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.receiver).poll(cx).map(|_| ())
-    }
-}
-
-/// A service.
-pub trait Service {
-    /// The future response value of this service.
-    type Future: Future;
-
-    /// Runs the service to completion.
-    ///
-    /// If the [`Token`] future provided to the service resolves, the service is expected to start
-    /// a graceful shutdown.
-    fn call(self, token: Token) -> Self::Future;
-}
-
-impl<T, F> Service for T
-where
-    T: FnOnce(Token) -> F,
-    F: Future,
-{
-    type Future = F;
-
-    fn call(self, token: Token) -> F {
-        self(token)
-    }
-}
-
-/// A service manager.
+/// An asynchronous service manager.
+///
+/// # Examples
+///
+/// ```
+/// # pollster::block_on(async {
+/// use meltdown::Meltdown;
+///
+/// let mut meltdown = Meltdown::new()
+///     .register(|_| async {
+///         // Completes immediately.
+///         1
+///     })
+///     .register(|token| async {
+///         // Waits for a shutdown trigger.
+///         token.await;
+///         2
+///     });
+///
+/// if let Some(id) = meltdown.next().await {
+///     println!("{id} stopped, shutting down");
+///     meltdown.trigger();
+/// }
+///
+/// while let Some(id) = meltdown.next().await {
+///     println!("{id} stopped");
+/// }
+/// # })
+/// ```
 pub struct Meltdown<T> {
-    senders: Vec<Sender<()>>,
-    futures: FuturesUnordered<Pin<Box<dyn Future<Output = T> + Send>>>,
+    token: Token,
+    futures: FuturesUnordered<Pin<Box<dyn Future<Output = T> + Send + 'static>>>,
 }
 
 impl<T> Meltdown<T> {
-    /// Creates a new instance of [`Meltdown`].
+    /// Creates a new meltdown instance.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            senders: Vec::new(),
+            token: Token::new(),
             futures: FuturesUnordered::new(),
         }
     }
 
-    /// Registers a service.
-    pub fn register<S>(&mut self, service: S) -> &mut Self
+    /// Returns a reference to the global token.
+    ///
+    /// Triggering this token is equivalent to calling [`Meltdown::trigger`]. The returned token
+    /// can be cloned and used to trigger a meltdown in other parts of the program, for example, in
+    /// another thread.
+    pub const fn token(&self) -> &Token {
+        &self.token
+    }
+
+    /// Registers a new service.
+    #[must_use]
+    pub fn register<S>(self, service: S) -> Self
     where
         S: Service,
         S::Future: Future<Output = T> + Send + 'static,
     {
-        let (sender, receiver) = oneshot::channel();
-        self.senders.push(sender);
-        self.futures
-            .push(Box::pin(service.call(Token::new(receiver))));
+        self.futures.push(Box::pin(service.run(self.token.clone())));
         self
     }
 
     /// Triggers a meltdown.
     ///
-    /// This will cause the [`Token`] futures of each running service to be resolved, signalling to
-    /// start a graceful shutdown.
-    pub fn trigger(&mut self) {
-        for sender in self.senders.drain(..) {
-            let _result = sender.send(());
-        }
+    /// This will call [`Token::trigger`] on the tokens passed to each managed service, signalling
+    /// to begin a graceful shutdown.
+    pub fn trigger(&self) {
+        self.token.trigger();
     }
 
-    /// Waits for the next service to complete, returning its output.
+    /// Returns the result of the next service to shut down.
     ///
-    /// If there are no services left, this will return `None`.
-    pub async fn wait_next(&mut self) -> Option<T> {
-        self.next().await
+    /// If there are no more services left, `None` is returned.
+    ///
+    /// Note that this method must be called in order to drive the inner service futures to
+    /// completion.
+    pub async fn next(&mut self) -> Option<T> {
+        StreamExt::next(self).await
     }
 }
 
@@ -121,7 +166,10 @@ impl<T> Default for Meltdown<T> {
 impl<T> Stream for Meltdown<T> {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
         Pin::new(&mut self.futures).poll_next(cx)
     }
 }
@@ -129,76 +177,46 @@ impl<T> Stream for Meltdown<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor;
 
     #[test]
     fn can_register_and_run_services() {
-        let mut meltdown = executor::block_on_stream(Meltdown::new());
+        pollster::block_on(async {
+            let mut meltdown = Meltdown::new()
+                .register(|_| async { "service 1" })
+                .register(|_| async { "service 2" })
+                .register(|_| async { "service 3" });
 
-        meltdown
-            .register(|_| async { "service 1" })
-            .register(|_| async { "service 2" })
-            .register(|_| async { "service 3" });
-
-        assert!(meltdown.next().is_some());
-        assert!(meltdown.next().is_some());
-        assert!(meltdown.next().is_some());
-        assert!(meltdown.next().is_none());
+            assert!(meltdown.next().await.is_some());
+            assert!(meltdown.next().await.is_some());
+            assert!(meltdown.next().await.is_some());
+            assert!(meltdown.next().await.is_none());
+        });
     }
 
     #[test]
     fn can_trigger_meltdown() {
-        let mut meltdown = executor::block_on_stream(Meltdown::new());
+        pollster::block_on(async {
+            let mut meltdown = Meltdown::new()
+                .register(|t| async {
+                    t.await;
+                    2
+                })
+                .register(|_| async { 1 })
+                .register(|_| async { 1 })
+                .register(|t| async {
+                    t.await;
+                    2
+                });
 
-        meltdown
-            .register(|t| async {
-                t.await;
-                2
-            })
-            .register(|_| async { 1 })
-            .register(|_| async { 1 })
-            .register(|t| async {
-                t.await;
-                2
-            });
+            assert_eq!(meltdown.next().await, Some(1));
+            assert_eq!(meltdown.next().await, Some(1));
 
-        assert_eq!(meltdown.next(), Some(1));
-        assert_eq!(meltdown.next(), Some(1));
+            meltdown.trigger();
 
-        meltdown.trigger();
+            assert_eq!(meltdown.next().await, Some(2));
+            assert_eq!(meltdown.next().await, Some(2));
 
-        assert_eq!(meltdown.next(), Some(2));
-        assert_eq!(meltdown.next(), Some(2));
-
-        assert!(meltdown.next().is_none());
-    }
-
-    #[test]
-    fn can_register_and_run_services_after_meltdowns() {
-        let mut meltdown = executor::block_on_stream(Meltdown::new());
-
-        meltdown.register(|_| async { 1 }).register(|t| async {
-            t.await;
-            2
+            assert!(meltdown.next().await.is_none());
         });
-
-        assert_eq!(meltdown.next(), Some(1));
-
-        meltdown.trigger();
-
-        assert_eq!(meltdown.next(), Some(2));
-
-        meltdown.register(|_| async { 3 }).register(|t| async {
-            t.await;
-            4
-        });
-
-        assert_eq!(meltdown.next(), Some(3));
-
-        meltdown.trigger();
-
-        assert_eq!(meltdown.next(), Some(4));
-
-        assert!(meltdown.next().is_none());
     }
 }
