@@ -1,6 +1,6 @@
 [package]
 name = "meltdown"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "0BSD"
 readme = "README.md"
@@ -9,5 +9,23 @@ keywords = ["asynchronous", "graceful", "shutdown"]
 categories = ["asynchronous"]
 repository = "https://github.com/joshua-cooper/meltdown"
 
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
 [dependencies]
-futures = "0.3.24"
+futures-channel = { version = "0.3.31", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
+pin-project-lite = "0.2.15"
+
+[dev-dependencies]
+pollster = "0.4.0"
+
+[features]
+catch-panic = []
+tagged = []
