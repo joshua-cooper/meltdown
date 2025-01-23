@@ -34,7 +34,7 @@ use crate::Service;
 use core::{
     future::Future,
     pin::Pin,
-    task::{Context, Poll},
+    task::{ready, Context, Poll},
 };
 use pin_project_lite::pin_project;
 
@@ -79,11 +79,12 @@ impl<T, F: Future> Future for TaggedFuture<T, F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        let output = ready!(this.future.poll(cx));
         let tag = this
             .tag
             .take()
             .expect("this future should never be polled again after resolving");
-        this.future.poll(cx).map(|output| (tag, output))
+        Poll::Ready((tag, output))
     }
 }
 
