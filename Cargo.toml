@@ -1,6 +1,6 @@
 [package]
 name = "meltdown"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "0BSD"
 readme = "README.md"
@@ -8,6 +8,10 @@ description = "A lightweight service manager to help with graceful shutdown of a
 keywords = ["asynchronous", "graceful", "shutdown"]
 categories = ["asynchronous"]
 repository = "https://github.com/joshua-cooper/meltdown"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints.rust]
 missing_docs = "warn"
