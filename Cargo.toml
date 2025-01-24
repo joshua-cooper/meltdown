@@ -1,6 +1,6 @@
 [package]
 name = "meltdown"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "0BSD"
 readme = "README.md"
