@@ -61,8 +61,10 @@
 extern crate alloc;
 
 #[cfg(feature = "catch-panic")]
+#[cfg_attr(docsrs, doc(cfg(feature = "catch-panic")))]
 pub mod catch_panic;
 #[cfg(feature = "tagged")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tagged")))]
 pub mod tagged;
 
 mod service;
